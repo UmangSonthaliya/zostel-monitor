@@ -19,7 +19,7 @@ NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 # Only notify for rooms whose name contains one of these (case-insensitive).
 # Empty list = notify for ANY available room.
 # Example: ["mixed dorm"] to only watch the mixed dorm.
-ROOM_FILTER = [dorm]
+ROOM_FILTER = ["dorm"]
 
 
 def send_push(title: str, body: str) -> None:
