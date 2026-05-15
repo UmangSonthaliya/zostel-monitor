@@ -27,7 +27,7 @@ def send_push(title: str, body: str) -> None:
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=body.encode("utf-8"),
         headers={
-            "Title": title,
+            "Title": title.encode("ascii", "ignore").decode("ascii").strip(),
             "Priority": "urgent",
             "Tags": "rotating_light,bed",
             "Click": URL,
