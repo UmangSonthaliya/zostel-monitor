@@ -1,21 +1,25 @@
 """
 Zostel Availability Monitor — GitHub Actions edition
-Runs once per invocation, exits, and sends a phone push via ntfy.sh
-when a room opens up for the configured dates.
+Intercepts the rooms-availability JSON API call directly instead of scraping text.
 """
 import os
 import asyncio
 import requests
 from playwright.async_api import async_playwright
 
-URL = "https://www.zostel.com/destination/poombarai/stay/zostel-plus-kodaikanal-poombarai-kdkh833?checkin=2026-05-22&checkout=2026-05-24"
-NTFY_TOPIC = os.environ["NTFY_TOPIC"]  # set as a GitHub secret
+CHECKIN = "2026-05-23"
+CHECKOUT = "2026-05-25"
+URL = (
+    f"https://www.zostel.com/destination/poombarai/stay/"
+    f"zostel-plus-kodaikanal-poombarai-kdkh833"
+    f"?checkin={CHECKIN}&checkout={CHECKOUT}"
+)
+NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
-SOLD_OUT_PHRASES = [
-    "sold out", "not available", "fully booked",
-    "no rooms available", "unavailable for these dates",
-]
-AVAILABLE_PHRASES = ["book now", "select room", "add to cart", "reserve now"]
+# Only notify for rooms whose name contains one of these (case-insensitive).
+# Empty list = notify for ANY available room.
+# Example: ["mixed dorm"] to only watch the mixed dorm.
+ROOM_FILTER = [dorm]
 
 
 def send_push(title: str, body: str) -> None:
@@ -32,7 +36,9 @@ def send_push(title: str, body: str) -> None:
     )
 
 
-async def fetch_page_text() -> str:
+async def fetch_rooms():
+    captured = {"data": None}
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -44,28 +50,72 @@ async def fetch_page_text() -> str:
             viewport={"width": 1366, "height": 900},
         )
         page = await context.new_page()
+
+        async def on_response(response):
+            try:
+                ct = (response.headers or {}).get("content-type", "")
+                if "application/json" not in ct:
+                    return
+                body = await response.json()
+                if (
+                    isinstance(body, dict)
+                    and "rooms" in body
+                    and "dates" in body
+                    and body.get("dates", {}).get("checkin") == CHECKIN
+                    and body.get("dates", {}).get("checkout") == CHECKOUT
+                ):
+                    captured["data"] = body
+            except Exception:
+                pass
+
+        page.on("response", lambda r: asyncio.create_task(on_response(r)))
+
         await page.goto(URL, wait_until="networkidle", timeout=60000)
-        await page.wait_for_timeout(4000)
-        text = (await page.inner_text("body")).lower()
+        await page.wait_for_timeout(5000)
         await browser.close()
-        return text
+
+    return captured["data"]
 
 
 async def main():
-    body = await fetch_page_text()
-    sold_out = next((p for p in SOLD_OUT_PHRASES if p in body), None)
-    available = next((p for p in AVAILABLE_PHRASES if p in body), None)
+    data = await fetch_rooms()
 
-    if available and not sold_out:
-        print(f"AVAILABLE — matched '{available}'")
-        send_push(
-            "🎉 Zostel Poombarai available!",
-            "A room just opened up for 22–24 May 2026. Tap to book before someone else grabs it.",
+    if not data:
+        print("ERROR: Did not capture the rooms availability API response.")
+        print("Either the site changed its API or the page didn't load in time.")
+        return
+
+    currency = data.get("currency", {}).get("symbol", "")
+    print(f"Checking {data['dates']['checkin']} -> {data['dates']['checkout']}")
+
+    matching_available = []
+    for room in data.get("rooms", []):
+        name = room.get("name", "Unknown")
+        avail = room.get("availability", {}) or {}
+        units = avail.get("units", 0) or 0
+        is_available = bool(avail.get("available")) and units > 0
+        price = (room.get("price") or {}).get("final", 0)
+
+        print(f"  - {name}: available={is_available}, units={units}, price={currency}{price}")
+
+        if not is_available:
+            continue
+        if ROOM_FILTER and not any(f.lower() in name.lower() for f in ROOM_FILTER):
+            continue
+        matching_available.append(
+            {"name": name, "units": units, "price": price}
         )
-    elif sold_out:
-        print(f"Still sold out — matched '{sold_out}'")
+
+    if matching_available:
+        lines = [
+            f"• {r['name']} — {r['units']} unit(s) at {currency}{r['price']}"
+            for r in matching_available
+        ]
+        body = f"Available for {CHECKIN} → {CHECKOUT}:\n\n" + "\n".join(lines)
+        print("\nAVAILABLE — sending notification")
+        send_push("🎉 Zostel Poombarai available!", body)
     else:
-        print("Unclear signal — neither phrase set matched. May need to tune phrases.")
+        print("\nNothing matching is available. No notification sent.")
 
 
 if __name__ == "__main__":
