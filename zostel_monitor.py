@@ -7,8 +7,8 @@ import asyncio
 import requests
 from playwright.async_api import async_playwright
 
-CHECKIN = "2026-05-23"
-CHECKOUT = "2026-05-25"
+CHECKIN = "2026-05-29"
+CHECKOUT = "2026-05-31"
 URL = (
     f"https://www.zostel.com/destination/poombarai/stay/"
     f"zostel-plus-kodaikanal-poombarai-kdkh833"
